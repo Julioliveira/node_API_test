@@ -5,6 +5,8 @@ var router = express.Router();
 var mongoose = require('mongoose');
 var app = express();
 var multer = require('multer');
+
+//multerS3 for amazon storage handling
 var multerS3 = require('multer-s3')
 var bucketName = 'market.images';
 var s3 = new aws.S3({ /* ... */ })
@@ -18,6 +20,7 @@ var filter = (req, file, cb) => {
         cb(null, false);
     }
 }
+
 var upload = multer({
     filter: filter,
     storage: multerS3({
@@ -33,19 +36,27 @@ var upload = multer({
     })
 })
 
-app.use((req, res, next) => { //for avoiding CORS
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    if (req.method === 'OPTIONS') { //allow methods to be executed 
-        res.header('Access-Control-Allow-Methods', 'PUT, POST, PATCH, GET, DELETE');
-        return res.status(200).json({});
-    };
-    next();
-})
-//models
+// code to save locally to keep working even though amazon is down
+// var storage = multer.diskStorage({
+//     destination: function (req, file, cb) {
+//         cb(null, '/Users/Julio/Desktop/front/resources/')
+//     },
+//     filename: function (req, file, cb) {
+//         cb(null, new Date().toISOString() + ' ' + file.originalname)
+//     }
+// })
+
+// var upload = multer({
+//     storage: storage
+// })
+
+
+//model for market object to be saved on database
 var Market = require('../models/market');
 
 //routes
+
+//get list of markets saved
 router.get('/markets', (req, res, next) => {
     Market.find()
         .select('name description location image _id')
@@ -63,6 +74,7 @@ router.get('/markets', (req, res, next) => {
         })
 });
 
+//get specific market by ID
 router.get('/markets/:marketId', (req, res, next) => {
     const id = req.params.marketId;
     Market.findById(id)
@@ -83,6 +95,7 @@ router.get('/markets/:marketId', (req, res, next) => {
         })
 });
 
+//get markets that start with certain charater(s)
 router.get('/markets/search/:name', (req, res, next) => {
     const name = req.params.name;
     var query = { name: new RegExp('^' + name) };
@@ -108,6 +121,7 @@ router.get('/markets/search/:name', (req, res, next) => {
         })
 });
 
+//save new markets
 router.post('/markets', upload.single('marketImage'), (req, res, next) => {
     const market = new Market({
         _id: new mongoose.Types.ObjectId(),
@@ -118,6 +132,10 @@ router.post('/markets', upload.single('marketImage'), (req, res, next) => {
             url: req.file.location,
             name: req.file.originalname,
             key: req.file.key
+            // the code above is for using amazon and the one below is for saving locally
+            // url: "resources/" + req.file.filename,
+            // name: req.file.originalname,
+            // key: null
         } : null
     });
     market.save()
@@ -140,6 +158,8 @@ router.post('/markets', upload.single('marketImage'), (req, res, next) => {
         });
 
 });
+
+//delete when there's no image or image file is saved locally
 router.delete('/markets/:marketId', (req, res, next) => {
     const id = req.params.marketId;
     Market.remove({ _id: id })
@@ -154,6 +174,7 @@ router.delete('/markets/:marketId', (req, res, next) => {
         })
 });
 
+//delete when there's image saved on S3
 router.delete('/markets/:marketId/:imageId', (req, res, next) => {
     const id = req.params.marketId;
     var params = { Bucket: bucketName, Key: req.params.imageId };
@@ -178,6 +199,7 @@ router.delete('/markets/:marketId/:imageId', (req, res, next) => {
         })
 });
 
+//edit market based on ID
 router.patch('/markets/:marketId', upload.single('marketImage'), (req, res, next) => {
     const id = req.params.marketId;
     var updateOps = {};
@@ -187,7 +209,12 @@ router.patch('/markets/:marketId', upload.single('marketImage'), (req, res, next
         url: req.file.location,
         name: req.file.originalname,
         key: req.file.key
+        // the code above is for using amazon and the one below is for saving locally
+        // url: "resources/" + req.file.filename,
+        // name: req.file.originalname,
+        // key: null
     } : null
+    //this if must be commented out when saving locally and not on S3 for tests
     if (imageId) {
         var params = { Bucket: bucketName, Key: imageId };
         s3.deleteObject(params, function (err, data) {
@@ -201,14 +228,13 @@ router.patch('/markets/:marketId', upload.single('marketImage'), (req, res, next
         description: req.body.description,
         location: req.body.location
     }
-    
+
     if (image) {
         updateOps.image = image;
     }
-    if (!image){
+    if (!image) {
         updateOps.image = {};
     }
-    console.log(updateOps);
     Market.update({ _id: id }, { $set: updateOps })
         .exec()
         .then(result => {
